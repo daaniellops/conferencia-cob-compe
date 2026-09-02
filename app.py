@@ -7,13 +7,13 @@ import streamlit as st
 from xhtml2pdf import pisa
 
 st.set_page_config(
-    page_title="Conferência Financeira - Crédito vs Débito",
+    page_title="Conferência Financeira - Extrato Completo",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Conferência Financeira - Extrato Completo")
-st.subheader("Separação Clara de Créditos (C) e Débitos (D)")
+st.title("📊 Relatório Completo de Créditos e Débitos")
+st.subheader("Separação Total de Entradas (C) e Saídas (D)")
 
 arquivo_pdf = st.file_uploader("Arraste e solte o PDF do extrato bancário aqui", type=["pdf"])
 
@@ -54,7 +54,7 @@ def extrair_metadados_e_dados(pdf_bytes):
                 if 'SALDO ANTERIOR' in linha_clean.upper() or 'DATA MOV.' in linha_clean.upper():
                     continue
                 
-                # Procura valores no formato do extrato (Coluna VALOR vem primeiro)
+                # Captura apenas o valor da coluna 'Valor' (primeiro match C/D da linha)
                 matches = re.findall(r'([\d\.]+,\d\d)\s+([CD])', linha_clean)
                 
                 if matches:
@@ -104,31 +104,27 @@ def extrair_metadados_e_dados(pdf_bytes):
 def fmt_brl(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-def gerar_tabela_html(df_sub, tipo_filtro, titulo_subsecao):
-    df_filtrado = df_sub[df_sub['Indicador'] == tipo_filtro].reset_index(drop=True)
-    
-    if df_filtrado.empty:
-        return f"<p style='color: #64748b; font-style: italic; font-size: 8pt;'>Nenhum lançamento de {titulo_subsecao.lower()} nesta categoria.</p>"
-    
-    cor_header = "#166534" if tipo_filtro == 'C' else "#991b1b"
+def gerar_tabela_categoria_html(df_sub, categoria_nome, cor_tema):
+    if df_sub.empty:
+        return ""
     
     linhas = ""
-    for idx, row in df_filtrado.iterrows():
+    for idx, row in df_sub.reset_index(drop=True).iterrows():
         linhas += f"""
         <tr>
             <td style="text-align: center;">{idx+1:02d}</td>
             <td style="text-align: center; font-weight: bold;">{row['Data Mov.']}</td>
             <td style="text-align: center;">{row['Nº Doc.']}</td>
             <td>{row['Histórico']}</td>
-            <td style="text-align: right; font-weight: bold; color: {cor_header};">{row['Valor Formatado']}</td>
+            <td style="text-align: right; font-weight: bold; color: {cor_tema};">{row['Valor Formatado']}</td>
         </tr>
         """
     
-    total_tipo = df_filtrado['Valor (R$)'].sum()
+    total_cat = df_sub['Valor (R$)'].sum()
     
     return f"""
-    <div style="margin-top: 6px; margin-bottom: 4px; font-weight: bold; color: {cor_header}; font-size: 8.5pt;">
-        ➔ {titulo_subsecao}
+    <div style="margin-top: 8px; margin-bottom: 4px; font-weight: bold; color: {cor_tema}; font-size: 8.5pt;">
+        ▪ Tópico: {categoria_nome}
     </div>
     <table class="data-table">
         <thead>
@@ -143,8 +139,8 @@ def gerar_tabela_html(df_sub, tipo_filtro, titulo_subsecao):
         <tbody>
             {linhas}
             <tr style="font-weight: bold; background-color: #f8fafc;">
-                <td colspan="4" style="text-align: right;">TOTAL ({titulo_subsecao.upper()}):</td>
-                <td style="text-align: right; color: {cor_header};">{fmt_brl(total_tipo)}</td>
+                <td colspan="4" style="text-align: right;">SUBTOTAL ({categoria_nome}):</td>
+                <td style="text-align: right; color: {cor_tema};">{fmt_brl(total_cat)}</td>
             </tr>
         </tbody>
     </table>
@@ -153,12 +149,31 @@ def gerar_tabela_html(df_sub, tipo_filtro, titulo_subsecao):
 def gerar_pdf_relatorio(meta, df_mov):
     data_emissao = datetime.now().strftime("%d/%m/%Y")
     
-    df_cob = df_mov[df_mov['Categoria'] == 'COB COMPE']
-    df_resg = df_mov[df_mov['Categoria'] == 'RESG AUT / APLICAÇÃO']
-    df_outros = df_mov[df_mov['Categoria'] == 'OUTRAS MOVIMENTAÇÕES']
+    df_creditos = df_mov[df_mov['Indicador'] == 'C']
+    df_debitos = df_mov[df_mov['Indicador'] == 'D']
     
-    total_creditos = df_mov[df_mov['Indicador'] == 'C']['Valor (R$)'].sum()
-    total_debitos = df_mov[df_mov['Indicador'] == 'D']['Valor (R$)'].sum()
+    total_creditos = df_creditos['Valor (R$)'].sum()
+    total_debitos = df_debitos['Valor (R$)'].sum()
+
+    # Função interna para montar o bloco de Crédito ou Débito completo por tópicos
+    def montar_bloco_tipo(df_tipo, tipo_indicador, titulo_bloco, cor_tema):
+        if df_tipo.empty:
+            return f"<p style='color: #64748b; font-style: italic; font-size: 8.5pt;'>Nenhum lançamento de {titulo_bloco.lower()} no extrato.</p>"
+        
+        df_cob = df_tipo[df_tipo['Categoria'] == 'COB COMPE']
+        df_resg = df_tipo[df_tipo['Categoria'] == 'RESG AUT / APLICAÇÃO']
+        df_outros = df_tipo[df_tipo['Categoria'] == 'OUTRAS MOVIMENTAÇÕES']
+        
+        html_bloco = f"""
+        <div class="section-main-title" style="background-color: {cor_tema}; color: white; padding: 6px 10px; margin-top: 14px; margin-bottom: 8px; font-weight: bold; border-radius: 3px; font-size: 10pt;">
+            {titulo_bloco} — TOTAL: {fmt_brl(df_tipo['Valor (R$)'].sum())}
+        </div>
+        """
+        html_bloco += gerar_tabela_categoria_html(df_cob, "COB COMPE", cor_tema)
+        html_bloco += gerar_tabela_categoria_html(df_resg, "RESG AUT / APLICAÇÃO", cor_tema)
+        html_bloco += gerar_tabela_categoria_html(df_outros, "OUTRAS MOVIMENTAÇÕES", cor_tema)
+        
+        return html_bloco
 
     html_full = f"""
     <!DOCTYPE html>
@@ -174,16 +189,15 @@ def gerar_pdf_relatorio(meta, df_mov):
             .card {{ background-color: #f1f5f9; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; }}
             .card-title {{ font-size: 7.5pt; font-weight: bold; color: #475569; text-transform: uppercase; }}
             .card-value {{ font-size: 10.5pt; font-weight: bold; margin-top: 3px; }}
-            table.data-table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; }}
+            table.data-table {{ width: 100%; border-collapse: collapse; margin-bottom: 8px; }}
             table.data-table th {{ background-color: #f1f5f9; padding: 5px; text-align: left; font-size: 8pt; border-bottom: 2px solid #cbd5e1; }}
             table.data-table td {{ padding: 5px; border-bottom: 1px solid #f1f5f9; font-size: 8pt; }}
-            .section-title {{ color: #1e3a8a; font-size: 10pt; margin-top: 12px; margin-bottom: 4px; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 3px; font-weight: bold; text-transform: uppercase; }}
         </style>
     </head>
     <body>
         <div class="header">
             <h2 style="margin:0; font-size: 13pt;">Relatório de Conferência Financeira</h2>
-            <p style="margin:2px 0 0 0; font-size: 8.5pt;">Separação Detalhada entre Créditos (Entradas) e Débitos (Saídas)</p>
+            <p style="margin:2px 0 0 0; font-size: 8.5pt;">Relatório Consolidado de Créditos e Débitos por Tópicos</p>
         </div>
         
         <table class="info-table">
@@ -210,26 +224,18 @@ def gerar_pdf_relatorio(meta, df_mov):
                 </td>
                 <td width="2%"></td>
                 <td width="32%" class="card">
-                    <div class="card-title">Saldo Líquido das Movimentações</div>
+                    <div class="card-title">Resultado do Período</div>
                     <div class="card-value" style="color: {'#15803d' if total_creditos - total_debitos >= 0 else '#b91c1c'};">{fmt_brl(total_creditos - total_debitos)}</div>
                 </td>
             </tr>
         </table>
 
-        <div class="section-title">1. COB COMPE</div>
-        {gerar_tabela_html(df_cob, 'C', 'Créditos (Entradas)')}
-        {gerar_tabela_html(df_cob, 'D', 'Débitos (Saídas)')}
-
-        <div class="section-title">2. RESG AUT / APLICAÇÃO</div>
-        {gerar_tabela_html(df_resg, 'C', 'Créditos (Entradas)')}
-        {gerar_tabela_html(df_resg, 'D', 'Débitos (Saídas)')}
-
-        {"<div class='section-title'>3. OUTRAS MOVIMENTAÇÕES</div>" if not df_outros.empty else ""}
-        {gerar_tabela_html(df_outros, 'C', 'Créditos (Entradas)') if not df_outros.empty else ""}
-        {gerar_tabela_html(df_outros, 'D', 'Débitos (Saídas)') if not df_outros.empty else ""}
+        {montar_bloco_tipo(df_creditos, 'C', '1. TODOS OS CRÉDITOS (ENTRADAS)', '#166534')}
+        
+        {montar_bloco_tipo(df_debitos, 'D', '2. TODOS OS DÉBITOS (SAÍDAS)', '#991b1b')}
 
         <div style="margin-top: 15px; font-size: 7pt; color: #64748b;">
-            <b>Nota Auditada:</b> A coluna de saldos do extrato foi ignorada para assegurar que apenas as movimentações reais de fluxo de caixa fossem computadas.
+            <b>Nota:</b> A coluna de saldo foi totalmente desconsiderada dos cálculos do relatório.
         </div>
     </body>
     </html>
@@ -243,51 +249,46 @@ if arquivo_pdf is not None:
     meta, df_mov = extrair_metadados_e_dados(arquivo_pdf)
     
     if not df_mov.empty:
-        total_cred = df_mov[df_mov['Indicador'] == 'C']['Valor (R$)'].sum()
-        total_deb = df_mov[df_mov['Indicador'] == 'D']['Valor (R$)'].sum()
+        df_creditos = df_mov[df_mov['Indicador'] == 'C']
+        df_debitos = df_mov[df_mov['Indicador'] == 'D']
+        
+        total_cred = df_creditos['Valor (R$)'].sum()
+        total_deb = df_debitos['Valor (R$)'].sum()
         
         st.info(f"**Cliente:** {meta['cliente']} | **Conta:** {meta['conta']} | **Período:** {meta['periodo']}")
         
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Créditos (Entradas)", fmt_brl(total_cred))
         col2.metric("Total Débitos (Saídas)", fmt_brl(total_deb), delta_color="inverse")
-        col3.metric("Saldo Líquido no Período", fmt_brl(total_cred - total_deb))
+        col3.metric("Resultado das Movimentações", fmt_brl(total_cred - total_deb))
         
         st.divider()
         
-        tab1, tab2, tab3 = st.tabs(["📌 COB COMPE", "🔄 RESG AUT / APLICAÇÃO", "📋 OUTRAS MOVIMENTAÇÕES"])
+        tab_c, tab_d = st.tabs(["🟢 TODOS OS CRÉDITOS (ENTRADAS)", "🔴 TODOS OS DÉBITOS (SAÍDAS)"])
         
-        def exibir_aba_streamlit(df_categoria):
-            df_c = df_categoria[df_categoria['Indicador'] == 'C']
-            df_d = df_categoria[df_categoria['Indicador'] == 'D']
+        def renderizar_telas_por_categoria(df_grupo):
+            if df_grupo.empty:
+                st.info("Nenhum lançamento encontrado para esta seção.")
+                return
             
-            st.markdown("#### 🟢 Créditos (Entradas)")
-            if not df_c.empty:
-                st.dataframe(df_c[['Data Mov.', 'Nº Doc.', 'Histórico', 'Valor Formatado']], use_container_width=True)
-            else:
-                st.caption("Nenhum crédito nesta categoria.")
-                
-            st.markdown("#### 🔴 Débitos (Saídas)")
-            if not df_d.empty:
-                st.dataframe(df_d[['Data Mov.', 'Nº Doc.', 'Histórico', 'Valor Formatado']], use_container_width=True)
-            else:
-                st.caption("Nenhum débito nesta categoria.")
+            for cat in ["COB COMPE", "RESG AUT / APLICAÇÃO", "OUTRAS MOVIMENTAÇÕES"]:
+                sub = df_grupo[df_grupo['Categoria'] == cat]
+                if not sub.empty:
+                    st.markdown(f"##### 📌 {cat}")
+                    st.dataframe(sub[['Data Mov.', 'Nº Doc.', 'Histórico', 'Valor Formatado']], use_container_width=True)
 
-        with tab1:
-            exibir_aba_streamlit(df_mov[df_mov['Categoria'] == 'COB COMPE'])
+        with tab_c:
+            renderizar_telas_por_categoria(df_creditos)
             
-        with tab2:
-            exibir_aba_streamlit(df_mov[df_mov['Categoria'] == 'RESG AUT / APLICAÇÃO'])
-            
-        with tab3:
-            exibir_aba_streamlit(df_mov[df_mov['Categoria'] == 'OUTRAS MOVIMENTAÇÕES'])
+        with tab_d:
+            renderizar_telas_por_categoria(df_debitos)
             
         pdf_out = gerar_pdf_relatorio(meta, df_mov)
         
         st.download_button(
-            label="📄 Baixar Relatório Separado (Crédito / Débito) em PDF",
+            label="📄 Baixar Relatório Completo em PDF",
             data=pdf_out,
-            file_name="Relatorio_Conferencia_Credito_Debito.pdf",
+            file_name="Relatorio_Creditos_e_Debitos_Separados.pdf",
             mime="application/pdf"
         )
     else:
