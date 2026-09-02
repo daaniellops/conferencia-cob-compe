@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("📊 Relatório Completo de Créditos e Débitos")
-st.subheader("Separação Total de Entradas (C) e Saídas (D)")
+st.subheader("Processamento de Créditos Específicos e Débitos (Sem Saldos)")
 
 arquivo_pdf = st.file_uploader("Arraste e solte o PDF do extrato bancário aqui", type=["pdf"])
 
@@ -54,7 +54,7 @@ def extrair_metadados_e_dados(pdf_bytes):
                 if 'SALDO ANTERIOR' in linha_clean.upper() or 'DATA MOV.' in linha_clean.upper():
                     continue
                 
-                # Captura apenas o valor da coluna 'Valor' (primeiro match C/D da linha)
+                # Captura o valor da coluna 'Valor' (primeiro match C/D da linha)
                 matches = re.findall(r'([\d\.]+,\d\d)\s+([CD])', linha_clean)
                 
                 if matches:
@@ -81,9 +81,23 @@ def extrair_metadados_e_dados(pdf_bytes):
                     if not historico:
                         historico = "Lançamento Bancário"
 
-                    if 'COB COMPE' in historico.upper():
+                    hist_upper = historico.upper()
+
+                    # REGRA DOS CRÉDITOS:
+                    if tipo_mov == 'C':
+                        # Exclui explicitamente DEV TA PIX e RESG AUT / Resgates
+                        if 'DEV TA PIX' in hist_upper or 'RESG' in hist_upper:
+                            continue
+                        
+                        # Permite apenas os termos solicitados
+                        termos_permitidos = ['CRED', 'CRED PIX CH', 'COB LOT DH', 'COB INTERN', 'COB COMPE']
+                        if not any(termo in hist_upper for termo in termos_permitidos):
+                            continue
+
+                    # Categorização por tópico
+                    if 'COB COMPE' in hist_upper:
                         categoria = 'COB COMPE'
-                    elif 'RESG' in historico.upper() or 'APLIC' in historico.upper():
+                    elif 'RESG' in hist_upper or 'APLIC' in hist_upper:
                         categoria = 'RESG AUT / APLICAÇÃO'
                     else:
                         categoria = 'OUTRAS MOVIMENTAÇÕES'
@@ -139,7 +153,7 @@ def gerar_tabela_categoria_html(df_sub, categoria_nome, cor_tema):
         <tbody>
             {linhas}
             <tr style="font-weight: bold; background-color: #f8fafc;">
-                <td colspan="4" style="text-align: right;">SUBTOTAL ({categoria_nome}):</td>
+                <td colspan="4" style="text-align: right;">SUB TOTAL ({categoria_nome}):</td>
                 <td style="text-align: right; color: {cor_tema};">{fmt_brl(total_cat)}</td>
             </tr>
         </tbody>
@@ -155,10 +169,9 @@ def gerar_pdf_relatorio(meta, df_mov):
     total_creditos = df_creditos['Valor (R$)'].sum()
     total_debitos = df_debitos['Valor (R$)'].sum()
 
-    # Função interna para montar o bloco de Crédito ou Débito completo por tópicos
     def montar_bloco_tipo(df_tipo, tipo_indicador, titulo_bloco, cor_tema):
         if df_tipo.empty:
-            return f"<p style='color: #64748b; font-style: italic; font-size: 8.5pt;'>Nenhum lançamento de {titulo_bloco.lower()} no extrato.</p>"
+            return f"<p style='color: #64748b; font-style: italic; font-size: 8.5pt;'>Nenhum lançamento encontrado para esta seção.</p>"
         
         df_cob = df_tipo[df_tipo['Categoria'] == 'COB COMPE']
         df_resg = df_tipo[df_tipo['Categoria'] == 'RESG AUT / APLICAÇÃO']
@@ -166,7 +179,7 @@ def gerar_pdf_relatorio(meta, df_mov):
         
         html_bloco = f"""
         <div class="section-main-title" style="background-color: {cor_tema}; color: white; padding: 6px 10px; margin-top: 14px; margin-bottom: 8px; font-weight: bold; border-radius: 3px; font-size: 10pt;">
-            {titulo_bloco} — TOTAL: {fmt_brl(df_tipo['Valor (R$)'].sum())}
+            {titulo_bloco} - TOTAL: {fmt_brl(df_tipo['Valor (R$)'].sum())}
         </div>
         """
         html_bloco += gerar_tabela_categoria_html(df_cob, "COB COMPE", cor_tema)
@@ -230,12 +243,12 @@ def gerar_pdf_relatorio(meta, df_mov):
             </tr>
         </table>
 
-        {montar_bloco_tipo(df_creditos, 'C', '1. TODOS OS CRÉDITOS (ENTRADAS)', '#166534')}
+        {montar_bloco_tipo(df_creditos, 'C', '1) TODOS OS CRÉDITOS (ENTRADAS)', '#166534')}
         
-        {montar_bloco_tipo(df_debitos, 'D', '2. TODOS OS DÉBITOS (SAÍDAS)', '#991b1b')}
+        {montar_bloco_tipo(df_debitos, 'D', '2) TODOS OS DÉBITOS (SAÍDAS)', '#991b1b')}
 
         <div style="margin-top: 15px; font-size: 7pt; color: #64748b;">
-            <b>Nota:</b> A coluna de saldo foi totalmente desconsiderada dos cálculos do relatório.
+            <b>Nota:</b> A coluna de saldo foi totalmente desconsiderada dos cálculos do relatório. Lançamentos de DEV TA PIX e RESG AUT foram excluídos dos créditos.
         </div>
     </body>
     </html>
@@ -264,7 +277,7 @@ if arquivo_pdf is not None:
         
         st.divider()
         
-        tab_c, tab_d = st.tabs(["🟢 TODOS OS CRÉDITOS (ENTRADAS)", "🔴 TODOS OS DÉBITOS (SAÍDAS)"])
+        tab_c, tab_d = st.tabs(["🟢 1) TODOS OS CRÉDITOS (ENTRADAS)", "🔴 2) TODOS OS DÉBITOS (SAÍDAS)"])
         
         def renderizar_telas_por_categoria(df_grupo):
             if df_grupo.empty:
@@ -286,10 +299,10 @@ if arquivo_pdf is not None:
         pdf_out = gerar_pdf_relatorio(meta, df_mov)
         
         st.download_button(
-            label="📄 Baixar Relatório Completo em PDF",
+            label="📄 Baixar Relatório Ajustado em PDF",
             data=pdf_out,
-            file_name="Relatorio_Creditos_e_Debitos_Separados.pdf",
+            file_name="Relatorio_Conferencia_Ajustado.pdf",
             mime="application/pdf"
         )
     else:
-        st.warning("Nenhuma movimentação de crédito ou débito foi encontrada no arquivo enviado.")
+        st.warning("Nenhuma movimentação correspondente aos critérios foi encontrada no arquivo enviado.")
