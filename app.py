@@ -1,8 +1,9 @@
+import io
 import re
 import pandas as pd
 import pdfplumber
 import streamlit as st
-from weasyprint import HTML
+from xhtml2pdf import pisa
 
 # Configuração da página
 st.set_page_config(
@@ -71,7 +72,7 @@ def gerar_pdf_relatorio(df_creditos, df_tarifas, total_creditos, total_tarifas):
             <td style="text-align: center;">{idx+1:02d}</td>
             <td style="text-align: center; font-weight: bold;">{row['Data Mov.']}</td>
             <td>{row['Histórico']}</td>
-            <td style="text-align: center;"><span style="background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 12px; font-weight: bold;">CRÉDITO (C)</span></td>
+            <td style="text-align: center;"><span style="background-color: #dcfce7; color: #166534; padding: 3px 8px; font-weight: bold;">CRÉDITO (C)</span></td>
             <td style="text-align: right; font-weight: bold;">{row['Valor Formatado']}</td>
         </tr>
         """
@@ -82,7 +83,7 @@ def gerar_pdf_relatorio(df_creditos, df_tarifas, total_creditos, total_tarifas):
         <tr>
             <td style="text-align: center;">{row['Data Mov.']}</td>
             <td>{row['Histórico']}</td>
-            <td style="text-align: center;"><span style="background-color: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 12px; font-weight: bold;">DÉBITO (D)</span></td>
+            <td style="text-align: center;"><span style="background-color: #fee2e2; color: #991b1b; padding: 3px 8px; font-weight: bold;">DÉBITO (D)</span></td>
             <td style="text-align: right;">{row['Valor Formatado']}</td>
         </tr>
         """
@@ -93,12 +94,12 @@ def gerar_pdf_relatorio(df_creditos, df_tarifas, total_creditos, total_tarifas):
     <head>
         <meta charset="UTF-8">
         <style>
-            @page {{ size: A4; margin: 15mm; }}
-            body {{ font-family: Arial, sans-serif; color: #1e293b; font-size: 10pt; }}
-            .header {{ background-color: #1e3a8a; color: white; padding: 15px; margin-bottom: 20px; border-radius: 4px; }}
+            @page {{ size: a4; margin: 1cm; }}
+            body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; font-size: 10pt; }}
+            .header {{ background-color: #1e3a8a; color: white; padding: 12px; margin-bottom: 20px; }}
             table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
-            th {{ background-color: #f1f5f9; padding: 8px; text-align: left; font-size: 9pt; border-bottom: 2px solid #cbd5e1; }}
-            td {{ padding: 8px; border-bottom: 1px solid #f1f5f9; font-size: 9pt; }}
+            th {{ background-color: #f1f5f9; padding: 6px; text-align: left; font-size: 9pt; border-bottom: 2px solid #cbd5e1; }}
+            td {{ padding: 6px; border-bottom: 1px solid #f1f5f9; font-size: 9pt; }}
         </style>
     </head>
     <body>
@@ -145,7 +146,9 @@ def gerar_pdf_relatorio(df_creditos, df_tarifas, total_creditos, total_tarifas):
     </html>
     """
     
-    return HTML(string=html_full).write_pdf()
+    pdf_buffer = io.BytesIO()
+    pisa.CreatePDF(io.StringIO(html_full), dest=pdf_buffer)
+    return pdf_buffer.getvalue()
 
 if arquivo_pdf is not None:
     df_creditos, df_tarifas = processar_pdf(arquivo_pdf)
