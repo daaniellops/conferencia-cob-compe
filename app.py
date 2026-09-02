@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("📊 Relatório Completo de Créditos e Débitos")
-st.subheader("Processamento de Créditos Específicos e Débitos (Sem Saldos)")
+st.subheader("Exibição Total com Exclusão Apenas no Totalizador de Créditos")
 
 arquivo_pdf = st.file_uploader("Arraste e solte o PDF do extrato bancário aqui", type=["pdf"])
 
@@ -54,7 +54,7 @@ def extrair_metadados_e_dados(pdf_bytes):
                 if 'SALDO ANTERIOR' in linha_clean.upper() or 'DATA MOV.' in linha_clean.upper():
                     continue
                 
-                # Captura o valor da coluna 'Valor' (primeiro match C/D da linha)
+                # Captura apenas o valor da coluna 'Valor' (primeiro match C/D da linha)
                 matches = re.findall(r'([\d\.]+,\d\d)\s+([CD])', linha_clean)
                 
                 if matches:
@@ -83,17 +83,6 @@ def extrair_metadados_e_dados(pdf_bytes):
 
                     hist_upper = historico.upper()
 
-                    # REGRA DOS CRÉDITOS:
-                    if tipo_mov == 'C':
-                        # Exclui explicitamente DEV TA PIX e RESG AUT / Resgates
-                        if 'DEV TA PIX' in hist_upper or 'RESG' in hist_upper:
-                            continue
-                        
-                        # Permite apenas os termos solicitados
-                        termos_permitidos = ['CRED', 'CRED PIX CH', 'COB LOT DH', 'COB INTERN', 'COB COMPE']
-                        if not any(termo in hist_upper for termo in termos_permitidos):
-                            continue
-
                     # Categorização por tópico
                     if 'COB COMPE' in hist_upper:
                         categoria = 'COB COMPE'
@@ -117,6 +106,17 @@ def extrair_metadados_e_dados(pdf_bytes):
 
 def fmt_brl(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+def calcular_total_creditos_validos(df_creditos):
+    if df_creditos.empty:
+        return 0.0
+    
+    # Filtra excluindo apenas do cálculo do Total Geral de Créditos
+    df_filtrado = df_creditos[
+        ~df_creditos['Histórico'].str.upper().str.contains('DEV TA PIX', na=False) & 
+        ~df_creditos['Histórico'].str.upper().str.contains('RESG AUT', na=False)
+    ]
+    return df_filtrado['Valor (R$)'].sum()
 
 def gerar_tabela_categoria_html(df_sub, categoria_nome, cor_tema):
     if df_sub.empty:
@@ -166,10 +166,10 @@ def gerar_pdf_relatorio(meta, df_mov):
     df_creditos = df_mov[df_mov['Indicador'] == 'C']
     df_debitos = df_mov[df_mov['Indicador'] == 'D']
     
-    total_creditos = df_creditos['Valor (R$)'].sum()
+    total_creditos_calculado = calcular_total_creditos_validos(df_creditos)
     total_debitos = df_debitos['Valor (R$)'].sum()
 
-    def montar_bloco_tipo(df_tipo, tipo_indicador, titulo_bloco, cor_tema):
+    def montar_bloco_tipo(df_tipo, tipo_indicador, titulo_bloco, cor_tema, total_bloco):
         if df_tipo.empty:
             return f"<p style='color: #64748b; font-style: italic; font-size: 8.5pt;'>Nenhum lançamento encontrado para esta seção.</p>"
         
@@ -179,7 +179,7 @@ def gerar_pdf_relatorio(meta, df_mov):
         
         html_bloco = f"""
         <div class="section-main-title" style="background-color: {cor_tema}; color: white; padding: 6px 10px; margin-top: 14px; margin-bottom: 8px; font-weight: bold; border-radius: 3px; font-size: 10pt;">
-            {titulo_bloco} - TOTAL: {fmt_brl(df_tipo['Valor (R$)'].sum())}
+            {titulo_bloco} - TOTAL: {fmt_brl(total_bloco)}
         </div>
         """
         html_bloco += gerar_tabela_categoria_html(df_cob, "COB COMPE", cor_tema)
@@ -228,7 +228,7 @@ def gerar_pdf_relatorio(meta, df_mov):
             <tr>
                 <td width="32%" class="card">
                     <div class="card-title">Total Créditos (Entradas)</div>
-                    <div class="card-value" style="color: #15803d;">{fmt_brl(total_creditos)}</div>
+                    <div class="card-value" style="color: #15803d;">{fmt_brl(total_creditos_calculado)}</div>
                 </td>
                 <td width="2%"></td>
                 <td width="32%" class="card">
@@ -238,17 +238,17 @@ def gerar_pdf_relatorio(meta, df_mov):
                 <td width="2%"></td>
                 <td width="32%" class="card">
                     <div class="card-title">Resultado do Período</div>
-                    <div class="card-value" style="color: {'#15803d' if total_creditos - total_debitos >= 0 else '#b91c1c'};">{fmt_brl(total_creditos - total_debitos)}</div>
+                    <div class="card-value" style="color: {'#15803d' if total_creditos_calculado - total_debitos >= 0 else '#b91c1c'};">{fmt_brl(total_creditos_calculado - total_debitos)}</div>
                 </td>
             </tr>
         </table>
 
-        {montar_bloco_tipo(df_creditos, 'C', '1) TODOS OS CRÉDITOS (ENTRADAS)', '#166534')}
+        {montar_bloco_tipo(df_creditos, 'C', '1) TODOS OS CRÉDITOS (ENTRADAS)', '#166534', total_creditos_calculado)}
         
-        {montar_bloco_tipo(df_debitos, 'D', '2) TODOS OS DÉBITOS (SAÍDAS)', '#991b1b')}
+        {montar_bloco_tipo(df_debitos, 'D', '2) TODOS OS DÉBITOS (SAÍDAS)', '#991b1b', total_debitos)}
 
         <div style="margin-top: 15px; font-size: 7pt; color: #64748b;">
-            <b>Nota:</b> A coluna de saldo foi totalmente desconsiderada dos cálculos do relatório. Lançamentos de DEV TA PIX e RESG AUT foram excluídos dos créditos.
+            <b>Nota:</b> Os lançamentos de DEV TA PIX e RESG AUT são exibidos nas tabelas mas desconsiderados do valor TOTAL de créditos.
         </div>
     </body>
     </html>
@@ -265,7 +265,7 @@ if arquivo_pdf is not None:
         df_creditos = df_mov[df_mov['Indicador'] == 'C']
         df_debitos = df_mov[df_mov['Indicador'] == 'D']
         
-        total_cred = df_creditos['Valor (R$)'].sum()
+        total_cred = calcular_total_creditos_validos(df_creditos)
         total_deb = df_debitos['Valor (R$)'].sum()
         
         st.info(f"**Cliente:** {meta['cliente']} | **Conta:** {meta['conta']} | **Período:** {meta['periodo']}")
@@ -305,4 +305,4 @@ if arquivo_pdf is not None:
             mime="application/pdf"
         )
     else:
-        st.warning("Nenhuma movimentação correspondente aos critérios foi encontrada no arquivo enviado.")
+        st.warning("Nenhuma movimentação foi encontrada no arquivo enviado.")
