@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("📊 Conferência Financeira - Extrato Completo")
-st.subheader("Processamento de Lançamentos (Exclusão Estrita de Saldos)")
+st.subheader("Processamento da Coluna 'Valor' (Coluna 'Saldo' Ignorada)")
 
 arquivo_pdf = st.file_uploader("Arraste e solte o PDF do extrato bancário aqui", type=["pdf"])
 
@@ -51,39 +51,46 @@ def extrair_metadados_e_dados(pdf_bytes):
             for linha in linhas:
                 linha_clean = linha.strip()
                 
-                # 1. ELIMINAÇÃO TOTAL DE QUALQUER TIPO DE SALDO
-                if re.search(r'\bSALDO\b', linha_clean, re.IGNORECASE):
+                # Desconsidera cabeçalho ou linhas com 'SALDO ANTERIOR' na descrição
+                if 'SALDO ANTERIOR' in linha_clean.upper() or 'DATA MOV.' in linha_clean.upper():
                     continue
                 
-                # 2. CAPTURA APENAS LINHAS DE MOVIMENTAÇÃO QUE TERMINAM EM 'C' OU 'D'
-                match_val = re.search(r'([\d\.]+,\d\d)\s+([CD])$', linha_clean)
-                if match_val:
-                    val_str = match_val.group(1)
-                    tipo_mov = match_val.group(2)
+                # Busca TODOS os valores com indicação C ou D na linha
+                # O extrato da Caixa traz a coluna VALOR primeiro e depois a coluna SALDO
+                matches = re.findall(r'([\d\.]+,\d\d)\s+([CD])', linha_clean)
+                
+                if matches:
+                    # Captura o PRIMEIRO valor (coluna Valor) e ignora o segundo (coluna Saldo)
+                    val_str, tipo_mov = matches[0]
                     val_float = float(val_str.replace('.', '').replace(',', '.'))
                     
+                    # Ignora linhas cujo valor do movimento seja zero (ex: 0,00)
+                    if val_float == 0.0:
+                        continue
+                        
                     partes = linha_clean.split()
                     
-                    # Extrai Data
+                    # Extrai Data Mov.
                     data = partes[0] if re.match(r'^\d{2}/\d{2}', partes[0]) else ""
                     
-                    # Extrai Número do Documento (normalmente o 2º elemento se for numérico)
+                    # Extrai Nr. Doc.
                     num_doc = "-"
                     if len(partes) > 1 and re.match(r'^\d+$', partes[1]):
                         num_doc = partes[1]
                         
-                    # Extrai Histórico Limpo
+                    # Limpa o Histórico removendo Data, Nr. Doc e os Valores (Valor e Saldo)
                     historico = linha_clean
                     if data:
                         historico = re.sub(r'^\d{2}/\d{2}(/\d{2,4})?\s+', '', historico)
                     if num_doc != "-" and historico.startswith(num_doc):
                         historico = re.sub(r'^\d+\s+', '', historico)
-                    historico = re.sub(r'\s+[\d\.]+,\d\d\s+[CD]$', '', historico).strip()
+                    # Remove todos os padrões de valores no final da linha
+                    historico = re.sub(r'\s+[\d\.]+,\d\d\s+[CD].*$', '', historico).strip()
                     
                     if not historico:
                         historico = "Lançamento Bancário"
 
-                    # Classificação por Categoria para os Tópicos
+                    # Agrupamento por Categoria para Tópicos
                     if 'COB COMPE' in historico.upper():
                         categoria = 'COB COMPE'
                     elif 'RESG' in historico.upper() or 'APLIC' in historico.upper():
@@ -185,7 +192,7 @@ def gerar_pdf_relatorio(meta, df_mov):
     <body>
         <div class="header">
             <h2 style="margin:0; font-size: 13pt;">Relatório de Conferência Financeira</h2>
-            <p style="margin:2px 0 0 0; font-size: 8.5pt;">Análise de Entradas (C) e Saídas (D) - Exclusão de Saldos</p>
+            <p style="margin:2px 0 0 0; font-size: 8.5pt;">Apuração Exclusiva da Coluna Valor (Coluna Saldo Desconsiderada)</p>
         </div>
         
         <table class="info-table">
@@ -227,7 +234,7 @@ def gerar_pdf_relatorio(meta, df_mov):
         {"<div class='section-title'>3. OUTRAS MOVIMENTAÇÕES</div>" + gerar_tabela_html(df_outros) if not df_outros.empty else ""}
 
         <div style="margin-top: 10px; font-size: 7pt; color: #64748b;">
-            <b>Nota:</b> Linhas referentes a saldos anteriores ou saldos diários foram desconsideradas para evitar duplicação de dados.
+            <b>Nota:</b> A coluna de saldos do extrato foi ignorada para evitar erros de soma e duplicidade.
         </div>
     </body>
     </html>
@@ -270,9 +277,9 @@ if arquivo_pdf is not None:
         pdf_out = gerar_pdf_relatorio(meta, df_mov)
         
         st.download_button(
-            label="📄 Baixar Relatório de Conferência em PDF",
+            label="📄 Baixar Relatório Corrigido em PDF",
             data=pdf_out,
-            file_name="Relatorio_Conferencia_Sem_Saldos.pdf",
+            file_name="Relatorio_Conferencia_Apenas_Valores.pdf",
             mime="application/pdf"
         )
     else:
